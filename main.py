@@ -2,7 +2,6 @@ import cv2
 import numpy as np
 import time
 from collections import deque
-import imutils
 
 # Configuration
 CONFIG = {
@@ -24,9 +23,9 @@ CONFIG = {
     'roi_width_margin': 0.05,
 
     # Object detection
-    'min_object_area': 100,  # Increased for large objects only
-    'min_object_width': 40,   # Minimum width to consider
-    'min_object_height': 40,  # Minimum height to consider
+    'min_object_area': 1000,  # Increased for large objects only
+    'min_object_width': 80,   # Minimum width to consider
+    'min_object_height': 80,  # Minimum height to consider
     'danger_zone_threshold': 0.3, 
     'object_confirmation_frames': 3,
 
@@ -290,102 +289,55 @@ def draw_lane(image, lane_params, color, thickness):
 
 def detect_objects(frame, roi_edges, frame_height, frame_width):
     """
-    Enhanced object detection function with multiple detection strategies
-    
-    Args:
-        frame (numpy.ndarray): Original color frame
-        roi_edges (numpy.ndarray): Edges within Region of Interest
-        frame_height (int): Height of the frame
-        frame_width (int): Width of the frame
-    
+    Detects objects in the ROI using contour-based detection.
     Returns:
         tuple: (all_objects, danger_objects)
     """
-    # Multiple detection strategies
     objects = []
     danger_objects = []
-    
-    # Danger zone calculation
+
+    # Calculate the y-coordinate for the danger zone threshold
     danger_zone_y = int(frame_height * (1 - CONFIG['danger_zone_threshold']))
-    
-    # Strategy 1: Contour-based detection
+
+    # Find contours in the ROI edges
     contours, _ = cv2.findContours(roi_edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
+
     for contour in contours:
-        # Calculate bounding box and area
+        # Bounding box and area
         x, y, w, h = cv2.boundingRect(contour)
         area = cv2.contourArea(contour)
-        
-        # Filtering criteria
+
+        # Filter out small or irrelevant contours
         if (area < CONFIG['min_object_area'] or 
             w < CONFIG['min_object_width'] or 
             h < CONFIG['min_object_height']):
             continue
-        
+
         # Aspect ratio and solidity checks
         aspect_ratio = w / float(h)
         if aspect_ratio < 0.3 or aspect_ratio > 3.0:
             continue
-        
+
         hull = cv2.convexHull(contour)
         hull_area = cv2.contourArea(hull)
         solidity = float(area) / hull_area if hull_area > 0 else 0
-        
         if solidity < 0.5:
             continue
-        
-        # Object classification and danger zone check
+
+        # Add to objects list
         objects.append((x, y, w, h))
-        
+
+        # Check if object is in the danger zone
         if y + h > danger_zone_y:
             center_x = x + w // 2
             frame_center_x = frame_width // 2
             distance_to_center = abs(center_x - frame_center_x)
             danger_objects.append((x, y, w, h, distance_to_center))
-    
-    # Strategy 2: Color-based object detection (optional enhancement)
-    # Convert frame to HSV for better color segmentation
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    
-    # Define color ranges for different object types (adjust as needed)
-    color_ranges = [
-        # Bright colors might indicate objects
-        ('yellow', np.array([20, 100, 100]), np.array([30, 255, 255])),
-        ('red1', np.array([0, 100, 100]), np.array([10, 255, 255])),
-        ('red2', np.array([160, 100, 100]), np.array([180, 255, 255])),
-        ('blue', np.array([100, 100, 100]), np.array([140, 255, 255]))
-    ]
-    
-    for color_name, lower, upper in color_ranges:
-        # Create color mask
-        mask = cv2.inRange(hsv, lower, upper)
-        
-        # Find contours in color mask
-        color_contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        for contour in color_contours:
-            x, y, w, h = cv2.boundingRect(contour)
-            area = cv2.contourArea(contour)
-            
-            # Similar filtering as contour-based detection
-            if (area < CONFIG['min_object_area'] or 
-                w < CONFIG['min_object_width'] or 
-                h < CONFIG['min_object_height']):
-                continue
-            
-            # Check if this object is not already detected
-            if not any(abs(x - obj[0]) < w and abs(y - obj[1]) < h for obj in objects):
-                objects.append((x, y, w, h))
-                
-                if y + h > danger_zone_y:
-                    center_x = x + w // 2
-                    frame_center_x = frame_width // 2
-                    distance_to_center = abs(center_x - frame_center_x)
-                    danger_objects.append((x, y, w, h, distance_to_center))
-    
-    # Sort danger objects by distance to center
+
+    # Sort danger objects by distance to image center
     danger_objects.sort(key=lambda obj: obj[4])
-    
+
+    # Return all objects and danger objects (without distance)
     return objects, [obj[:4] for obj in danger_objects]
 
 def make_decision(left_lane, right_lane, danger_objects, frame_width):
